@@ -37,22 +37,52 @@ import os
 import uvicorn
 import traceback
 import tensorflow as tf
+import joblib
+import numpy as np
+
 
 from pydantic import BaseModel
 from urllib.request import Request
 from fastapi import FastAPI, Response, UploadFile
 from utils import load_image_into_numpy_array
+from typing import List
 
 # Initialize Model
 # If you already put yout model in the same folder as this main.py
 # You can load .h5 model or any model below this line
 
 # If you use h5 type uncomment line below
-# model = tf.keras.models.load_model('./my_model.h5')
+model = tf.keras.models.load_model('./model_v2.h5')
 # If you use saved model type uncomment line below
 # model = tf.saved_model.load("./my_model_folder")
 
 app = FastAPI()
+
+tokenizer = joblib.load("tokenizer2.pkl")
+
+
+max_length = 120
+trunc_type = 'post'
+padding_type = 'post'
+
+dic_label = {
+    0: "benteng kuto besak",
+    1: "pulau kemaro",
+    2: "sungai musi",
+    3: "warung terapung",
+    4: "riverside restaurant",
+    5: "sentral kampung pempek",
+    6: "taman purbakala",
+    7: "museum monpera",
+    8: "museum sultan mahmud II",
+    9: "jembatan ampera",
+    10: "wisata alam punti kayu",
+    11: "taman kambang iwak besak",
+    12: "bird park jaka baring",
+    13: "jaka baring sport city",
+    14: "palembang indah mall",
+}
+
 
 # This endpoint is for a test (or health check) to this server
 @app.get("/")
@@ -63,6 +93,10 @@ def index():
 class RequestText(BaseModel):
     text:str
 
+# Define a Pydantic model for the response
+class PredictResponse(BaseModel):
+    top_labels: List[str]
+
 @app.post("/predict_text")
 def predict_text(req: RequestText, response: Response):
     try:
@@ -71,45 +105,24 @@ def predict_text(req: RequestText, response: Response):
         print("Uploaded text:", text)
         
         # Step 1: (Optional) Do your text preprocessing
-        
-        # Step 2: Prepare your data to your model
-        
-        # Step 3: Predict the data
-        # result = model.predict(...)
-        
-        # Step 4: Change the result your determined API output
-        
-        return "Endpoint not implemented"
-    except Exception as e:
-        traceback.print_exc()
-        response.status_code = 500
-        return "Internal Server Error"
+        sequence = tokenizer.texts_to_sequences(text)
+        padded_sequence = tf.keras.preprocessing.sequence.pad_sequences(sequence, maxlen=max_length, truncating=trunc_type, padding=padding_type)
 
-# If your model need image input use this endpoint!
-@app.post("/predict_image")
-def predict_image(uploaded_file: UploadFile, response: Response):
-    try:
-        # Checking if it's an image
-        if uploaded_file.content_type not in ["image/jpeg", "image/png"]:
-            response.status_code = 400
-            return "File is Not an Image"
-        
-        # In here you will get a numpy array in "image" variable.
-        # You can use this file, to load and do processing
-        # later down the line
-        image = load_image_into_numpy_array(uploaded_file.file.read())
-        print("Image shape:", image.shape)
-        
-        # Step 1: (Optional, but you should have one) Do your image preprocessing
         
         # Step 2: Prepare your data to your model
-        
+        predictions = model.predict(padded_sequence)
+
         # Step 3: Predict the data
         # result = model.predict(...)
+        top_n = 3
+        top_indices = np.argsort(predictions[0])[-top_n:][::-1]
         
-        # Step 4: Change the result your determined API output
+        # Get the corresponding labels
+        top_labels = [dic_label.get(index, "Unknown") for index in top_indices]
+        print(top_labels)
         
-        return "Endpoint not implemented"
+        return PredictResponse(top_labels=top_labels)
+        
     except Exception as e:
         traceback.print_exc()
         response.status_code = 500
@@ -118,6 +131,6 @@ def predict_image(uploaded_file: UploadFile, response: Response):
 
 # Starting the server
 # Your can check the API documentation easily using /docs after the server is running
-port = os.environ.get("PORT", 8080)
-print(f"Listening to http://0.0.0.0:{port}")
-uvicorn.run(app, host='0.0.0.0',port=port)
+port = os.environ.get("PORT", 8081)
+print(f"Listening to http://localhost:{port}")
+uvicorn.run(app, host='localhost',port=port)
