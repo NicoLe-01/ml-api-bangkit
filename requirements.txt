@@ -6,3 +6,4 @@ numpy
 tensorflow
 joblib
 numpy
+pandas

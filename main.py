@@ -39,6 +39,7 @@ import traceback
 import tensorflow as tf
 import joblib
 import numpy as np
+import pandas as pd
 
 
 from pydantic import BaseModel
@@ -52,14 +53,21 @@ from typing import List
 # You can load .h5 model or any model below this line
 
 # If you use h5 type uncomment line below
-model = tf.keras.models.load_model('./model_v2.h5')
+model = tf.keras.models.load_model('./models/model_v3.h5')
 # If you use saved model type uncomment line below
 # model = tf.saved_model.load("./my_model_folder")
 
+# Load Tokenizer
+tokenizer = joblib.load("./tokenizer/tokenizer2.pkl")
+
+# Load cosine similarity
+cosine_matrix = pd.read_csv('./csv/destination_similarities.csv', header=0, index_col=0)
+cosine_matrix = np.array(cosine_matrix)
+
+# Load cleaned dataset
+cleaned_df = pd.read_csv('./csv/destination_cleaned.csv')
+
 app = FastAPI()
-
-tokenizer = joblib.load("tokenizer2.pkl")
-
 
 max_length = 120
 trunc_type = 'post'
@@ -93,6 +101,9 @@ def index():
 class RequestText(BaseModel):
     text:str
 
+class RequestList(BaseModel):
+    preferences: List[str]
+
 # Define a Pydantic model for the response
 class PredictResponse(BaseModel):
     top_labels: List[str]
@@ -106,7 +117,7 @@ def predict_text(req: RequestText, response: Response):
         
         # Step 1: (Optional) Do your text preprocessing
         sequence = tokenizer.texts_to_sequences(text)
-        padded_sequence = tf.keras.preprocessing.sequence.pad_sequences(sequence, maxlen=max_length, truncating=trunc_type, padding=padding_type)
+        padded_sequence = tf.keras.preprocessing.sequence.pad_sequences(sequence, maxlen=120, truncating=trunc_type, padding=padding_type)
 
         
         # Step 2: Prepare your data to your model
@@ -116,6 +127,7 @@ def predict_text(req: RequestText, response: Response):
         # result = model.predict(...)
         top_n = 3
         top_indices = np.argsort(predictions[0])[-top_n:][::-1]
+        print(top_indices)
         
         # Get the corresponding labels
         top_labels = [dic_label.get(index, "Unknown") for index in top_indices]
@@ -128,9 +140,44 @@ def predict_text(req: RequestText, response: Response):
         response.status_code = 500
         return "Internal Server Error"
 
+@app.post("/recomendations_destination")
+def predict_text(req: RequestList, response: Response):
+    try:
+        # In here you will get text sent by the user
+        text = req.preferences
+        print("Uploaded preferences:", text)
+        
+        if len(text) == 0:
+            result = cleaned_df.sort_values(by='rating', ascending=False)
+            result = list(result['nama'][:3])
+            print(result)
+        else:
+            filtered_df = cleaned_df[cleaned_df['jenis'].isin(text)]
+            
+            if filtered_df.empty:
+                return []  # If no destinations match the user preferences, return an empty list
+
+            indices = filtered_df.index.tolist()
+
+            idx = indices[0]
+            sim_scores = list(enumerate(cosine_matrix[idx]))
+            sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+            sim_scores = sim_scores[1:4]  # Get the top 3 similar destinations (excluding itself)
+            destination_indices = [i[0] for i in sim_scores]
+            
+            result = cleaned_df['nama'].iloc[destination_indices].tolist()
+        
+        return PredictResponse(top_labels=result)
+        
+    except Exception as e:
+        traceback.print_exc()
+        response.status_code = 500
+        return "Internal Server Error"
+
+
 
 # Starting the server
 # Your can check the API documentation easily using /docs after the server is running
 port = os.environ.get("PORT", 8081)
-print(f"Listening to http://localhost:{port}")
-uvicorn.run(app, host='localhost',port=port)
+print(f"Listening to http://0.0.0.0:{port}")
+uvicorn.run(app, host='0.0.0.0',port=port)
